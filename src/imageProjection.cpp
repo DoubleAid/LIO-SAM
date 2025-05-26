@@ -48,14 +48,14 @@ private:
     ros::Publisher pubExtractedCloud;
     ros::Publisher pubLaserCloudInfo;
 
-    ros::Subscriber subImu;
-    std::deque<sensor_msgs::Imu> imuQueue;
+    ros::Subscriber subImu;                             // 订阅 IMU 数据
+    std::deque<sensor_msgs::Imu> imuQueue;              // IMU 数据队列
 
-    ros::Subscriber subOdom;
-    std::deque<nav_msgs::Odometry> odomQueue;
+    ros::Subscriber subOdom;                            // 订阅里程计数据
+    std::deque<nav_msgs::Odometry> odomQueue;           // 里程计数据队列
 
-    std::deque<sensor_msgs::PointCloud2> cloudQueue;
-    sensor_msgs::PointCloud2 currentCloudMsg;
+    std::deque<sensor_msgs::PointCloud2> cloudQueue;    // 用于存储点云数据的队列
+    sensor_msgs::PointCloud2 currentCloudMsg;           // 当前点云消息
 
     double *imuTime = new double[queueLength];
     double *imuRotX = new double[queueLength];
@@ -67,6 +67,7 @@ private:
     Eigen::Affine3f transStartInverse;
 
     pcl::PointCloud<PointXYZIRT>::Ptr laserCloudIn;
+    // 临时废弃的点云数据
     pcl::PointCloud<OusterPointXYZIRT>::Ptr tmpOusterCloudIn;
     pcl::PointCloud<PointType>::Ptr   fullCloud;
     pcl::PointCloud<PointType>::Ptr   extractedCloud;
@@ -95,7 +96,10 @@ public:
         subOdom       = nh.subscribe<nav_msgs::Odometry>(odomTopic+"_incremental", 2000, &ImageProjection::odometryHandler, this, ros::TransportHints().tcpNoDelay());
         subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>(pointCloudTopic, 5, &ImageProjection::cloudHandler, this, ros::TransportHints().tcpNoDelay());
 
+        // deskewed 校正的
+        // 输出提取的校正点云数据
         pubExtractedCloud = nh.advertise<sensor_msgs::PointCloud2> ("lio_sam/deskew/cloud_deskewed", 1);
+        // 输出激光点云数据
         pubLaserCloudInfo = nh.advertise<lio_sam::cloud_info> ("lio_sam/deskew/cloud_info", 1);
 
         allocateMemory();
@@ -146,8 +150,10 @@ public:
 
     ~ImageProjection(){}
 
+    // IMU 处理
     void imuHandler(const sensor_msgs::Imu::ConstPtr& imuMsg)
     {
+        // 读取IMU数据，并放入队列中去
         sensor_msgs::Imu thisImu = imuConverter(*imuMsg);
 
         std::lock_guard<std::mutex> lock1(imuLock);
@@ -171,12 +177,14 @@ public:
         // cout << "roll: " << imuRoll << ", pitch: " << imuPitch << ", yaw: " << imuYaw << endl << endl;
     }
 
+    // 里程计处理函数
     void odometryHandler(const nav_msgs::Odometry::ConstPtr& odometryMsg)
     {
         std::lock_guard<std::mutex> lock2(odoLock);
         odomQueue.push_back(*odometryMsg);
     }
 
+    // 激光雷达点云处理函数
     void cloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     {
         if (!cachePointCloud(laserCloudMsg))
@@ -194,6 +202,7 @@ public:
         resetParameters();
     }
 
+    // 主要功能是​​缓存、格式转换和预处理点云数据​​，为后续的去畸变（deskew）、特征提取和位姿优化做准备。
     bool cachePointCloud(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     {
         // cache point cloud
