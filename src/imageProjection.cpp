@@ -185,11 +185,14 @@ public:
     }
 
     // 激光雷达点云处理函数
+    // 当来到一个点云数据时调用该函数
     void cloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     {
+        // 存储点云数据，并检查数据是否正确
         if (!cachePointCloud(laserCloudMsg))
             return;
 
+        // 检验
         if (!deskewInfo())
             return;
 
@@ -206,13 +209,17 @@ public:
     bool cachePointCloud(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     {
         // cache point cloud
+        // 首先就是把点云数据存储起来
         cloudQueue.push_back(*laserCloudMsg);
+        // 如果点云数据太少，就跳过
         if (cloudQueue.size() <= 2)
             return false;
 
         // convert cloud
+        // 获取队列最前面的点云数据
         currentCloudMsg = std::move(cloudQueue.front());
         cloudQueue.pop_front();
+        // 根据传感器的型号选择不同的点云格式，并转换为PCL点d云格式，将数据传给 laserCloudIn
         if (sensor == SensorType::VELODYNE || sensor == SensorType::LIVOX)
         {
             pcl::moveFromROSMsg(currentCloudMsg, *laserCloudIn);
@@ -242,11 +249,13 @@ public:
         }
 
         // get timestamp
+        // 获取点云头信息，包括 开始时间戳和 结束时间戳
         cloudHeader = currentCloudMsg.header;
         timeScanCur = cloudHeader.stamp.toSec();
         timeScanEnd = timeScanCur + laserCloudIn->points.back().time;
 
         // check dense flag
+        // 检测点云是否为密集点云，如果不是，就报错并关闭程序
         if (laserCloudIn->is_dense == false)
         {
             ROS_ERROR("Point cloud is not in dense format, please remove NaN points first!");
@@ -254,6 +263,7 @@ public:
         }
 
         // check ring channel
+        // 检查点云是否包含环通道，如果没有，就报错并关闭程序
         static int ringFlag = 0;
         if (ringFlag == 0)
         {
@@ -274,6 +284,7 @@ public:
         }
 
         // check point time
+        // 检查点云时间戳，如果没有时间戳，就报错并关闭程序
         if (deskewFlag == 0)
         {
             deskewFlag = -1;
@@ -292,18 +303,20 @@ public:
         return true;
     }
 
+    // 校正信息/去畸变
     bool deskewInfo()
     {
         std::lock_guard<std::mutex> lock1(imuLock);
         std::lock_guard<std::mutex> lock2(odoLock);
 
         // make sure IMU data available for the scan
+        // imu数据应该能够覆盖掉整个激光雷达的数据， 否则就继续等待
         if (imuQueue.empty() || imuQueue.front().header.stamp.toSec() > timeScanCur || imuQueue.back().header.stamp.toSec() < timeScanEnd)
         {
             ROS_DEBUG("Waiting for IMU data ...");
             return false;
         }
-
+        // 查找 所有
         imuDeskewInfo();
 
         odomDeskewInfo();
@@ -315,31 +328,40 @@ public:
     {
         cloudInfo.imuAvailable = false;
 
+        // 遍历整个IMU队列，
         while (!imuQueue.empty())
         {
+            // 如果当前IMU的时间戳太小了，也就是信息太旧了，就把这个 IMU 数据移除掉
             if (imuQueue.front().header.stamp.toSec() < timeScanCur - 0.01)
                 imuQueue.pop_front();
             else
                 break;
         }
 
+        // 如果把所有的数据都删除了，就说明没有IMU数据，就直接返回
         if (imuQueue.empty())
             return;
 
         imuPointerCur = 0;
 
+        // 遍历 IMU 队列的所有数据
         for (int i = 0; i < (int)imuQueue.size(); ++i)
         {
             sensor_msgs::Imu thisImuMsg = imuQueue[i];
             double currentImuTime = thisImuMsg.header.stamp.toSec();
 
             // get roll, pitch, and yaw estimation for this scan
+            // 
             if (currentImuTime <= timeScanCur)
+                // 将IMU位姿转换成车辆坐标
                 imuRPY2rosRPY(&thisImuMsg, &cloudInfo.imuRollInit, &cloudInfo.imuPitchInit, &cloudInfo.imuYawInit);
 
+            // 如果当前IMU数据时间已经大于 点云最后的时间了，就跳出循环
             if (currentImuTime > timeScanEnd + 0.01)
                 break;
 
+            // 如果 IMU 指针时 第一个 0 时，直接初始化第0个
+            // 作为初始坐标
             if (imuPointerCur == 0){
                 imuRotX[0] = 0;
                 imuRotY[0] = 0;
@@ -350,11 +372,14 @@ public:
             }
 
             // get angular velocity
+            // 转换当前的角加速度
             double angular_x, angular_y, angular_z;
             imuAngular2rosAngular(&thisImuMsg, &angular_x, &angular_y, &angular_z);
 
             // integrate rotation
+            // 积分
             double timeDiff = currentImuTime - imuTime[imuPointerCur-1];
+            // 计算当前位姿，旋转角度
             imuRotX[imuPointerCur] = imuRotX[imuPointerCur-1] + angular_x * timeDiff;
             imuRotY[imuPointerCur] = imuRotY[imuPointerCur-1] + angular_y * timeDiff;
             imuRotZ[imuPointerCur] = imuRotZ[imuPointerCur-1] + angular_z * timeDiff;
@@ -370,18 +395,21 @@ public:
         cloudInfo.imuAvailable = true;
     }
 
+    // 里程计校正
     void odomDeskewInfo()
     {
         cloudInfo.odomAvailable = false;
-
+        // 如果里程计队列为空，直接返回
         while (!odomQueue.empty())
         {
+            // 如果里程计数据太旧了，就直接移除
             if (odomQueue.front().header.stamp.toSec() < timeScanCur - 0.01)
                 odomQueue.pop_front();
             else
                 break;
         }
 
+        // 如果里程计队列为空，直接返回
         if (odomQueue.empty())
             return;
 
@@ -408,6 +436,7 @@ public:
         tf::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
 
         // Initial guess used in mapOptimization
+        // 设置初始化的位姿
         cloudInfo.initialGuessX = startOdomMsg.pose.pose.position.x;
         cloudInfo.initialGuessY = startOdomMsg.pose.pose.position.y;
         cloudInfo.initialGuessZ = startOdomMsg.pose.pose.position.z;
@@ -420,6 +449,7 @@ public:
         // get end odometry at the end of the scan
         odomDeskewFlag = false;
 
+        // 如果里程计数据不能覆盖所有点，就直接返回
         if (odomQueue.back().header.stamp.toSec() < timeScanEnd)
             return;
 
