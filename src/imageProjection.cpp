@@ -444,6 +444,7 @@ public:
         cloudInfo.initialGuessPitch = pitch;
         cloudInfo.initialGuessYaw   = yaw;
 
+        // 标记里程计可用
         cloudInfo.odomAvailable = true;
 
         // get end odometry at the end of the scan
@@ -455,6 +456,7 @@ public:
 
         nav_msgs::Odometry endOdomMsg;
 
+        // 确定里程计数据的结束位置
         for (int i = 0; i < (int)odomQueue.size(); ++i)
         {
             endOdomMsg = odomQueue[i];
@@ -465,15 +467,25 @@ public:
                 break;
         }
 
+        // 如果里程计数据的开始和结束位置的协方差不一致，就直接返回
+        // 使用 round 进行四舍五入，因为在数据的误差没有大的波动的时候，协方差的值不会有很大的波动
+        // 但这种有点问题，比如有一个是 1.499， 另一个是 1.501，这样的话会判断两个协方差是不一致的
+        // 最好是 abs(start - end) < threshold 这样比较比较好
         if (int(round(startOdomMsg.pose.covariance[0])) != int(round(endOdomMsg.pose.covariance[0])))
             return;
 
+        // ​​计算两个里程计位姿之间的相对运动变换​​，平移和欧拉角增量
+        // 获取变换起始
         Eigen::Affine3f transBegin = pcl::getTransformation(startOdomMsg.pose.pose.position.x, startOdomMsg.pose.pose.position.y, startOdomMsg.pose.pose.position.z, roll, pitch, yaw);
-
+        // 获取方向
         tf::quaternionMsgToTF(endOdomMsg.pose.pose.orientation, orientation);
         tf::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
+        // 获取结束时的位置
         Eigen::Affine3f transEnd = pcl::getTransformation(endOdomMsg.pose.pose.position.x, endOdomMsg.pose.pose.position.y, endOdomMsg.pose.pose.position.z, roll, pitch, yaw);
 
+        // 计算旋转矩阵的变化
+        // 理解方式 transBegin 时相对于世界坐标系的旋转，也就是 world -> transBegin, 而 transBegin.inverse 表示 transBegin -> world
+        // 同理 transEnd 表示 world -> transEnd, 所以整个 就可以表示成 transBegin -> transEnd 
         Eigen::Affine3f transBt = transBegin.inverse() * transEnd;
 
         float rollIncre, pitchIncre, yawIncre;
@@ -482,6 +494,7 @@ public:
         odomDeskewFlag = true;
     }
 
+    // 根据当前的点云点的时间，计算一下旋转的角度
     void findRotation(double pointTime, float *rotXCur, float *rotYCur, float *rotZCur)
     {
         *rotXCur = 0; *rotYCur = 0; *rotZCur = 0;
@@ -494,12 +507,14 @@ public:
             ++imuPointerFront;
         }
 
+        // 如果当前的IMU数据没有比当前点云的时间小，也就是没有当前点云的IMU数据，或者IMYU的指针为0
         if (pointTime > imuTime[imuPointerFront] || imuPointerFront == 0)
         {
             *rotXCur = imuRotX[imuPointerFront];
             *rotYCur = imuRotY[imuPointerFront];
             *rotZCur = imuRotZ[imuPointerFront];
         } else {
+            // 插值计算当前点的旋转角度
             int imuPointerBack = imuPointerFront - 1;
             double ratioFront = (pointTime - imuTime[imuPointerBack]) / (imuTime[imuPointerFront] - imuTime[imuPointerBack]);
             double ratioBack = (imuTime[imuPointerFront] - pointTime) / (imuTime[imuPointerFront] - imuTime[imuPointerBack]);
@@ -525,19 +540,25 @@ public:
         // *posZCur = ratio * odomIncreZ;
     }
 
+    // 优化点
     PointType deskewPoint(PointType *point, double relTime)
     {
+        // 如果不需要优化或者 imu数据不存在
         if (deskewFlag == -1 || cloudInfo.imuAvailable == false)
             return *point;
 
+        // 计算获取该点数据的实际时间
         double pointTime = timeScanCur + relTime;
 
         float rotXCur, rotYCur, rotZCur;
+        // 计算旋转角度
         findRotation(pointTime, &rotXCur, &rotYCur, &rotZCur);
 
         float posXCur, posYCur, posZCur;
+        // 计算平移数据
         findPosition(relTime, &posXCur, &posYCur, &posZCur);
 
+        // 如果是第一个点，就初始化第一个点的旋转矩阵的你矩阵
         if (firstPointFlag == true)
         {
             transStartInverse = (pcl::getTransformation(posXCur, posYCur, posZCur, rotXCur, rotYCur, rotZCur)).inverse();
@@ -545,10 +566,13 @@ public:
         }
 
         // transform points to start
+        // 否则就计算
         Eigen::Affine3f transFinal = pcl::getTransformation(posXCur, posYCur, posZCur, rotXCur, rotYCur, rotZCur);
+        // 计算出当前点到起始点的变换矩阵
         Eigen::Affine3f transBt = transStartInverse * transFinal;
 
         PointType newPoint;
+        // 更新当前点的位置
         newPoint.x = transBt(0,0) * point->x + transBt(0,1) * point->y + transBt(0,2) * point->z + transBt(0,3);
         newPoint.y = transBt(1,0) * point->x + transBt(1,1) * point->y + transBt(1,2) * point->z + transBt(1,3);
         newPoint.z = transBt(2,0) * point->x + transBt(2,1) * point->y + transBt(2,2) * point->z + transBt(2,3);
@@ -557,10 +581,12 @@ public:
         return newPoint;
     }
 
+    // 点云投影
     void projectPointCloud()
     {
         int cloudSize = laserCloudIn->points.size();
         // range image projection
+        // 遍历点云内的所有点
         for (int i = 0; i < cloudSize; ++i)
         {
             PointType thisPoint;
@@ -569,22 +595,28 @@ public:
             thisPoint.z = laserCloudIn->points[i].z;
             thisPoint.intensity = laserCloudIn->points[i].intensity;
 
+            // 计算当前点到雷达的位置
             float range = pointDistance(thisPoint);
+            // 如果雷达位置太近或者太远就舍弃
             if (range < lidarMinRange || range > lidarMaxRange)
                 continue;
 
+            // 获取 扫描行
             int rowIdn = laserCloudIn->points[i].ring;
             if (rowIdn < 0 || rowIdn >= N_SCAN)
                 continue;
 
+            // 计划按照行和列进行下采样
             if (rowIdn % downsampleRate != 0)
                 continue;
 
             int columnIdn = -1;
             if (sensor == SensorType::VELODYNE || sensor == SensorType::OUSTER)
             {
+                // 计算角度
                 float horizonAngle = atan2(thisPoint.x, thisPoint.y) * 180 / M_PI;
                 static float ang_res_x = 360.0/float(Horizon_SCAN);
+                // 计算当前这个角度所属于的列
                 columnIdn = -round((horizonAngle-90.0)/ang_res_x) + Horizon_SCAN/2;
                 if (columnIdn >= Horizon_SCAN)
                     columnIdn -= Horizon_SCAN;
@@ -595,17 +627,24 @@ public:
                 columnIdnCountVec[rowIdn] += 1;
             }
             
+            // 如果 列ID 超出范围就舍弃
             if (columnIdn < 0 || columnIdn >= Horizon_SCAN)
                 continue;
 
+            // 求当前这个格子的距离的点，如果当前的格子已经有数据了，就算了
+            // 第一个点不一定是最近点或最具代表性的点（可能是噪声或边缘点）。
+            // 最好是 均值或中值滤波​或者 按距离加权选择​
             if (rangeMat.at<float>(rowIdn, columnIdn) != FLT_MAX)
                 continue;
 
+            // 修正这个点
             thisPoint = deskewPoint(&thisPoint, laserCloudIn->points[i].time);
 
+            // 初始化这个数据
             rangeMat.at<float>(rowIdn, columnIdn) = range;
 
             int index = columnIdn + rowIdn * Horizon_SCAN;
+            // 在所有点云添加这个点
             fullCloud->points[index] = thisPoint;
         }
     }
@@ -614,6 +653,7 @@ public:
     {
         int count = 0;
         // extract segmented cloud for lidar odometry
+        // 遍历下采样的每一个小块
         for (int i = 0; i < N_SCAN; ++i)
         {
             cloudInfo.startRingIndex[i] = count - 1 + 5;
