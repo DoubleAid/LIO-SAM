@@ -468,7 +468,9 @@ public:
         if (doneFirstOpt == false)
             return;
 
+        // 获取当前时间
         double imuTime = ROS_TIME(&thisImu);
+        // 计算两帧的时间差，默认为500hz
         double dt = (lastImuT_imu < 0) ? (1.0 / 500.0) : (imuTime - lastImuT_imu);
         lastImuT_imu = imuTime;
 

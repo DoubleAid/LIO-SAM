@@ -189,6 +189,7 @@ public:
     void cloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     {
         // 存储点云数据，并检查数据是否正确
+        // 检查点云是否有timestamp, ring等关键字
         if (!cachePointCloud(laserCloudMsg))
             return;
 
@@ -400,6 +401,7 @@ public:
     {
         cloudInfo.odomAvailable = false;
         // 如果里程计队列为空，直接返回
+        // 移除过时的里程计数据（比当前扫描时间早0.01秒以上）
         while (!odomQueue.empty())
         {
             // 如果里程计数据太旧了，就直接移除
@@ -417,6 +419,7 @@ public:
             return;
 
         // get start odometry at the beinning of the scan
+        // 遍历队列找到最接近扫描开始时间timeScanCur的里程计数据
         nav_msgs::Odometry startOdomMsg;
 
         for (int i = 0; i < (int)odomQueue.size(); ++i)
@@ -489,6 +492,7 @@ public:
         Eigen::Affine3f transBt = transBegin.inverse() * transEnd;
 
         float rollIncre, pitchIncre, yawIncre;
+        // 计算出位姿增量
         pcl::getTranslationAndEulerAngles(transBt, odomIncreX, odomIncreY, odomIncreZ, rollIncre, pitchIncre, yawIncre);
 
         odomDeskewFlag = true;

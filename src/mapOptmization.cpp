@@ -712,7 +712,7 @@ public:
             return;
         
         visualization_msgs::MarkerArray markerArray;
-        // loop nodes
+        // loop nodesupdateInitialGuess
         visualization_msgs::Marker markerNode;
         markerNode.header.frame_id = odometryFrame;
         markerNode.header.stamp = timeLaserInfoStamp;
@@ -759,16 +759,6 @@ public:
         pubLoopConstraintEdge.publish(markerArray);
     }
 
-
-
-
-
-
-
-    
-
-
-
     void updateInitialGuess()
     {
         // save current transformation before any processing
@@ -776,12 +766,15 @@ public:
 
         static Eigen::Affine3f lastImuTransformation;
         // initialization
+        // 如果是第一帧
         if (cloudKeyPoses3D->points.empty())
         {
+            // 使用IMU初始姿态
             transformTobeMapped[0] = cloudInfo.imuRollInit;
             transformTobeMapped[1] = cloudInfo.imuPitchInit;
             transformTobeMapped[2] = cloudInfo.imuYawInit;
 
+            // 可选：不使用IMU的航向角
             if (!useImuHeadingInitialization)
                 transformTobeMapped[2] = 0;
 
@@ -792,16 +785,21 @@ public:
         // use imu pre-integration estimation for pose guess
         static bool lastImuPreTransAvailable = false;
         static Eigen::Affine3f lastImuPreTransformation;
+        // 如果有IMU预积分里程计
         if (cloudInfo.odomAvailable == true)
         {
+            // 获取当前IMU预积分位姿
             Eigen::Affine3f transBack = pcl::getTransformation(cloudInfo.initialGuessX,    cloudInfo.initialGuessY,     cloudInfo.initialGuessZ, 
                                                                cloudInfo.initialGuessRoll, cloudInfo.initialGuessPitch, cloudInfo.initialGuessYaw);
             if (lastImuPreTransAvailable == false)
             {
+                // 预积分不可用
                 lastImuPreTransformation = transBack;
                 lastImuPreTransAvailable = true;
             } else {
+                // 计算相对运动：上一时刻IMU位姿 → 当前时刻IMU位姿
                 Eigen::Affine3f transIncre = lastImuPreTransformation.inverse() * transBack;
+                // 将相对运动应用到上一帧激光位姿
                 Eigen::Affine3f transTobe = trans2Affine3f(transformTobeMapped);
                 Eigen::Affine3f transFinal = transTobe * transIncre;
                 pcl::getTranslationAndEulerAngles(transFinal, transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5], 
@@ -815,12 +813,14 @@ public:
         }
 
         // use imu incremental estimation for pose guess (only rotation)
-        if (cloudInfo.imuAvailable == true)
+        if (cloudInfo.imuAvailable == true)  // 如果没有预积分，使用原始IMU
         {
             Eigen::Affine3f transBack = pcl::getTransformation(0, 0, 0, cloudInfo.imuRollInit, cloudInfo.imuPitchInit, cloudInfo.imuYawInit);
             Eigen::Affine3f transIncre = lastImuTransformation.inverse() * transBack;
 
             Eigen::Affine3f transTobe = trans2Affine3f(transformTobeMapped);
+
+            // 只更新旋转，保持位置不变
             Eigen::Affine3f transFinal = transTobe * transIncre;
             pcl::getTranslationAndEulerAngles(transFinal, transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5], 
                                                           transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
@@ -853,8 +853,14 @@ public:
         std::vector<float> pointSearchSqDis;
 
         // extract all the nearby key poses and downsample them
+        // 使用KD-tree在关键帧位姿云中搜索附近的关键帧
         kdtreeSurroundingKeyPoses->setInputCloud(cloudKeyPoses3D); // create kd-tree
-        kdtreeSurroundingKeyPoses->radiusSearch(cloudKeyPoses3D->back(), (double)surroundingKeyframeSearchRadius, pointSearchInd, pointSearchSqDis);
+        kdtreeSurroundingKeyPoses->radiusSearch(cloudKeyPoses3D->back(),                // 当前位置（最新关键帧）
+                                               (double)surroundingKeyframeSearchRadius, // 搜索半径
+                                               pointSearchInd,                          // 返回的索引
+                                               pointSearchSqDis                         // 返回的距离平方
+        );
+        // 收集所有在搜索半径内的关键帧
         for (int i = 0; i < (int)pointSearchInd.size(); ++i)
         {
             int id = pointSearchInd[i];
@@ -961,6 +967,7 @@ public:
     {
         updatePointAssociateToMap();
 
+        // 并行处理每个角点，提高计算效率
         #pragma omp parallel for num_threads(numberOfCores)
         for (int i = 0; i < laserCloudCornerLastDSNum; i++)
         {
@@ -968,8 +975,8 @@ public:
             std::vector<int> pointSearchInd;
             std::vector<float> pointSearchSqDis;
 
-            pointOri = laserCloudCornerLastDS->points[i];
-            pointAssociateToMap(&pointOri, &pointSel);
+            pointOri = laserCloudCornerLastDS->points[i];   // 当前帧角点（局部坐标系）
+            pointAssociateToMap(&pointOri, &pointSel);      // 变换到世界坐标系
             kdtreeCornerFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
 
             cv::Mat matA1(3, 3, CV_32F, cv::Scalar::all(0));
