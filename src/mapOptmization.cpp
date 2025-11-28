@@ -985,6 +985,7 @@ public:
                     
             if (pointSearchSqDis[4] < 1.0) {
                 float cx = 0, cy = 0, cz = 0;
+                // 计算五个点的均值
                 for (int j = 0; j < 5; j++) {
                     cx += laserCloudCornerFromMapDS->points[pointSearchInd[j]].x;
                     cy += laserCloudCornerFromMapDS->points[pointSearchInd[j]].y;
@@ -992,6 +993,7 @@ public:
                 }
                 cx /= 5; cy /= 5;  cz /= 5;
 
+                // 计算五个点的标准差和协方差
                 float a11 = 0, a12 = 0, a13 = 0, a22 = 0, a23 = 0, a33 = 0;
                 for (int j = 0; j < 5; j++) {
                     float ax = laserCloudCornerFromMapDS->points[pointSearchInd[j]].x - cx;
@@ -1008,26 +1010,34 @@ public:
                 matA1.at<float>(1, 0) = a12; matA1.at<float>(1, 1) = a22; matA1.at<float>(1, 2) = a23;
                 matA1.at<float>(2, 0) = a13; matA1.at<float>(2, 1) = a23; matA1.at<float>(2, 2) = a33;
 
+                // 特征值分解
                 cv::eigen(matA1, matD1, matV1);
 
+                // 如果特征值的第一个值，也就是最大值 是次值的三倍，也就是说这五个点只沿某个方向分布明显，这说明这5个点呈线性排列
                 if (matD1.at<float>(0, 0) > 3 * matD1.at<float>(0, 1)) {
 
                     float x0 = pointSel.x;
                     float y0 = pointSel.y;
                     float z0 = pointSel.z;
-                    float x1 = cx + 0.1 * matV1.at<float>(0, 0);
-                    float y1 = cy + 0.1 * matV1.at<float>(0, 1);
-                    float z1 = cz + 0.1 * matV1.at<float>(0, 2);
+
+                    // 沿主特征向量方向构建直线段
+                    // 取线上的两个点
+                    float x1 = cx + 0.1 * matV1.at<float>(0, 0);    // 第一个特征值的特征向量的X
+                    float y1 = cy + 0.1 * matV1.at<float>(0, 1);    // 第一个特征值的特征向量的Y
+                    float z1 = cz + 0.1 * matV1.at<float>(0, 2);    // 第一个特征值的特征向量的Z
                     float x2 = cx - 0.1 * matV1.at<float>(0, 0);
                     float y2 = cy - 0.1 * matV1.at<float>(0, 1);
                     float z2 = cz - 0.1 * matV1.at<float>(0, 2);
 
+                    // 根据计算三角形的面积 S = |(P0 - P1) x (P0 - P2)| / |P2 - P1|
                     float a012 = sqrt(((x0 - x1)*(y0 - y2) - (x0 - x2)*(y0 - y1)) * ((x0 - x1)*(y0 - y2) - (x0 - x2)*(y0 - y1)) 
                                     + ((x0 - x1)*(z0 - z2) - (x0 - x2)*(z0 - z1)) * ((x0 - x1)*(z0 - z2) - (x0 - x2)*(z0 - z1)) 
                                     + ((y0 - y1)*(z0 - z2) - (y0 - y2)*(z0 - z1)) * ((y0 - y1)*(z0 - z2) - (y0 - y2)*(z0 - z1)));
 
+                    // 求底边的长度
                     float l12 = sqrt((x1 - x2)*(x1 - x2) + (y1 - y2)*(y1 - y2) + (z1 - z2)*(z1 - z2));
 
+                    // 距离函数对点坐标的偏导数
                     float la = ((y1 - y2)*((x0 - x1)*(y0 - y2) - (x0 - x2)*(y0 - y1)) 
                               + (z1 - z2)*((x0 - x1)*(z0 - z2) - (x0 - x2)*(z0 - z1))) / a012 / l12;
 
@@ -1037,16 +1047,19 @@ public:
                     float lc = -((x1 - x2)*((x0 - x1)*(z0 - z2) - (x0 - x2)*(z0 - z1)) 
                                + (y1 - y2)*((y0 - y1)*(z0 - z2) - (y0 - y2)*(z0 - z1))) / a012 / l12;
 
+                    // 面积的二倍值 = S / 底边
                     float ld2 = a012 / l12;
 
+                    // 计算权重系数，距离越大，权重越小
                     float s = 1 - 0.9 * fabs(ld2);
 
+                    // 加权后的雅可比系数
                     coeff.x = s * la;
                     coeff.y = s * lb;
                     coeff.z = s * lc;
-                    coeff.intensity = s * ld2;
+                    coeff.intensity = s * ld2;  // 加权残差
 
-                    if (s > 0.1) {
+                    if (s > 0.1) { // 只保留权重较大的匹配
                         laserCloudOriCornerVec[i] = pointOri;
                         coeffSelCornerVec[i] = coeff;
                         laserCloudOriCornerFlag[i] = true;
@@ -1069,6 +1082,7 @@ public:
 
             pointOri = laserCloudSurfLastDS->points[i];
             pointAssociateToMap(&pointOri, &pointSel); 
+            // 查找最近的五个点
             kdtreeSurfFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
 
             Eigen::Matrix<float, 5, 3> matA0;
@@ -1076,6 +1090,7 @@ public:
             Eigen::Vector3f matX0;
 
             matA0.setZero();
+            // b都设成-1
             matB0.fill(-1);
             matX0.setZero();
 
@@ -1085,7 +1100,7 @@ public:
                     matA0(j, 1) = laserCloudSurfFromMapDS->points[pointSearchInd[j]].y;
                     matA0(j, 2) = laserCloudSurfFromMapDS->points[pointSearchInd[j]].z;
                 }
-
+                // 求解 Ax = B, 求解a矩阵
                 matX0 = matA0.colPivHouseholderQr().solve(matB0);
 
                 float pa = matX0(0, 0);
@@ -1093,6 +1108,7 @@ public:
                 float pc = matX0(2, 0);
                 float pd = 1;
 
+                // 归一化处理
                 float ps = sqrt(pa * pa + pb * pb + pc * pc);
                 pa /= ps; pb /= ps; pc /= ps; pd /= ps;
 
@@ -1105,10 +1121,10 @@ public:
                         break;
                     }
                 }
-
+                // 更新权重
                 if (planeValid) {
                     float pd2 = pa * pointSel.x + pb * pointSel.y + pc * pointSel.z + pd;
-
+                    // 因为激光并不是平行的，相同的旋转误差，远处的残差会比近处的大
                     float s = 1 - 0.9 * fabs(pd2) / sqrt(sqrt(pointOri.x * pointOri.x
                             + pointOri.y * pointOri.y + pointOri.z * pointOri.z));
 
@@ -1172,12 +1188,13 @@ public:
             return false;
         }
 
-        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0));
-        cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAtB(6, 1, CV_32F, cv::Scalar::all(0));
-        cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0));
+        // 构建最小二乘问题：J^T * J * Δx = -J^T * r
+        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));  // 雅可比矩阵J (N×6)
+        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0)); // J的转置 (6×N) 
+        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0));               // J^T * J (6×6)
+        cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));  // 残差向量r (N×1)
+        cv::Mat matAtB(6, 1, CV_32F, cv::Scalar::all(0));               // J^T * r (6×1)
+        cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0));                 // 增量Δx (6×1)
 
         PointType pointOri, coeff;
 
@@ -1187,11 +1204,13 @@ public:
             pointOri.y = laserCloudOri->points[i].z;
             pointOri.z = laserCloudOri->points[i].x;
             // lidar -> camera
-            coeff.x = coeffSel->points[i].y;
+            coeff.x = coeffSel->points[i].y;    
             coeff.y = coeffSel->points[i].z;
             coeff.z = coeffSel->points[i].x;
             coeff.intensity = coeffSel->points[i].intensity;
             // in camera
+
+            // (旋转矩阵对roll的偏导) × (距离对点的偏导) × coeff
             float arx = (crx*sry*srz*pointOri.x + crx*crz*sry*pointOri.y - srx*sry*pointOri.z) * coeff.x
                       + (-srx*srz*pointOri.x - crz*srx*pointOri.y - crx*pointOri.z) * coeff.y
                       + (crx*cry*srz*pointOri.x + crx*cry*crz*pointOri.y - cry*srx*pointOri.z) * coeff.z;
@@ -1205,6 +1224,7 @@ public:
                       + (crx*crz*pointOri.x - crx*srz*pointOri.y) * coeff.y
                       + ((sry*srz + cry*crz*srx)*pointOri.x + (crz*sry-cry*srx*srz)*pointOri.y)*coeff.z;
             // camera -> lidar
+            // 对平移部分的偏导
             matA.at<float>(i, 0) = arz;
             matA.at<float>(i, 1) = arx;
             matA.at<float>(i, 2) = ary;
